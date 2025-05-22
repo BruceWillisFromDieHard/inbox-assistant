@@ -1,6 +1,1 @@
-fastapi
-uvicorn
-httpx
-python-dotenv
-openai
-msal
+wheel==0.45.1
