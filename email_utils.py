@@ -21,10 +21,19 @@ def fetch_emails_since(from_time_iso):
     return r.json().get("value", [])
 
 def analyze_emails(emails):
-    summaries = [
-        f"From {e['sender']['emailAddress']['name']}: {e['subject']}\n{e['body']['content'][:300]}"
-        for e in emails
-    ]
+    if not emails:
+        return "No recent emails found."
+
+    summaries = []
+    for e in emails:
+        try:
+            name = e.get("sender", {}).get("emailAddress", {}).get("name", "Unknown Sender")
+            subject = e.get("subject", "[No Subject]")
+            body = e.get("body", {}).get("content", "")
+            summaries.append(f"From {name}: {subject}\n{body[:300]}")
+        except Exception as ex:
+            summaries.append(f"[Error parsing email: {ex}]")
+
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
@@ -32,4 +41,5 @@ def analyze_emails(emails):
             {"role": "user", "content": "\n\n".join(summaries)}
         ]
     )
+
     return response["choices"][0]["message"]["content"]
