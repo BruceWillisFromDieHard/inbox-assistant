@@ -12,7 +12,8 @@ def fetch_emails_since(from_time_iso):
         "Authorization": f"Bearer {token}"
     }
 
-    url = f"{GRAPH_URL}/users/{os.getenv('USER_ID')}/messages"
+    # ✅ Use the /mailFolders/Inbox/messages endpoint
+    url = f"{GRAPH_URL}/users/{os.getenv('USER_ID')}/mailFolders/Inbox/messages"
     params = {
         "$orderby": "receivedDateTime desc",
         "$top": 20,
@@ -25,8 +26,9 @@ def fetch_emails_since(from_time_iso):
     r.raise_for_status()
 
     emails = r.json().get("value", [])
-    logging.info("📥 %d emails fetched", len(emails))
+    logging.info("✅ %d emails fetched", len(emails))
     return emails
+
 
 def analyze_emails(emails):
     summaries = [
@@ -37,7 +39,7 @@ def analyze_emails(emails):
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "Summarize and prioritize these emails."},
+            {"role": "system", "content": "Summarize and prioritize these emails. Format as a briefing."},
             {"role": "user", "content": "\n\n".join(summaries)}
         ]
     )
