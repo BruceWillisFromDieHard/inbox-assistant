@@ -1,3 +1,4 @@
+# app.py
 import os
 import logging
 from datetime import datetime, timedelta
@@ -9,15 +10,14 @@ from dotenv import load_dotenv
 from auth import get_access_token
 from email_utils import fetch_emails_since, analyze_emails
 
-# 1. Load .env from project root
+# 1. Load .env
 load_dotenv()
 
 # 2. Configure root logger
 logging.basicConfig(level=logging.INFO)
 
-# 3. Instantiate FastAPI with debug and dynamic SERVICE_URL
 app = FastAPI(
-    debug=True,  # ← enable full tracebacks in HTTP responses
+    debug=True,     # ← enable debug traces in responses
     title="Inbox Assistant API",
     version="1.0.0",
     servers=[{
@@ -26,27 +26,23 @@ app = FastAPI(
     }]
 )
 
-# 4. Request schema
 class EmailTimeRequest(BaseModel):
     from_time: str
 
-# 5. Endpoint: fetch and summarize important emails
 @app.post("/getImportantEmails")
 def get_important_emails(request: EmailTimeRequest):
     try:
-        emails = fetch_emails_since(request.from_time)
+        emails  = fetch_emails_since(request.from_time)
         summary = analyze_emails(emails)
         return {"summary": summary}
     except Exception as e:
         logging.exception("❌ Error in /getImportantEmails")
-        # Return full exception detail for debugging
         raise HTTPException(status_code=500, detail=str(e))
 
-# 6. Endpoint: morning-style inbox broadcast
 @app.post("/summarizeInboxLikeNews")
 def summarize_news_style():
     try:
-        # Default cutoff: last 12 hours, explicitly Z-terminated
+        # default to last 12 hours (with trailing Z)
         cutoff = (datetime.utcnow() - timedelta(hours=12)).isoformat() + "Z"
         emails = fetch_emails_since(cutoff)
         summary = analyze_emails(emails)
@@ -55,7 +51,6 @@ def summarize_news_style():
         logging.exception("❌ Error in /summarizeInboxLikeNews")
         raise HTTPException(status_code=500, detail=str(e))
 
-# 7. Custom OpenAPI to inject SERVICE_URL into docs
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
