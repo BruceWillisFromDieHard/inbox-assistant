@@ -11,7 +11,7 @@ logging.basicConfig(level=logging.INFO)
 # Base URL for Microsoft Graph
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 
-# Initialize the new OpenAI v1 client
+# Initialize the OpenAI v1 client
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def _parse_iso(dt_str: str) -> datetime | None:
@@ -26,6 +26,7 @@ def _parse_iso(dt_str: str) -> datetime | None:
         return datetime.fromisoformat(dt_str)
     except Exception:
         return None
+
 
 def fetch_emails_since(from_time_iso: str) -> list[dict]:
     """
@@ -50,7 +51,6 @@ def fetch_emails_since(from_time_iso: str) -> list[dict]:
     response.raise_for_status()
     items = response.json().get("value", [])
 
-    # Local cutoff filter
     filtered = []
     for item in items:
         received = _parse_iso(item.get("receivedDateTime", ""))
@@ -62,6 +62,7 @@ def fetch_emails_since(from_time_iso: str) -> list[dict]:
     logging.info("✅ %d emails after local filter", len(filtered))
     return filtered
 
+
 def analyze_emails(emails: list[dict]) -> str:
     """
     Summarize and prioritize a list of email dicts using OpenAI.
@@ -69,7 +70,6 @@ def analyze_emails(emails: list[dict]) -> str:
     if not emails:
         return "No new emails since that time."
 
-    # Build the chat messages
     system_msg = {
         "role": "system",
         "content": "You are a concise assistant. Summarize and prioritize these emails."
@@ -98,5 +98,4 @@ def analyze_emails(emails: list[dict]) -> str:
         logging.error("⚠️ OpenAI error: %s", e)
         raise RuntimeError(f"OpenAI request failed: {e}")
 
-    # Extract and return the assistant’s response
     return resp.choices[0].message.content
