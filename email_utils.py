@@ -2,18 +2,17 @@ import os
 import logging
 from datetime import datetime
 import httpx
-import openai
-from dotenv import load_dotenv
+from openai import OpenAI, OpenAIError
 from auth import get_access_token
 
-# Load environment vars from .env (project root)
-load_dotenv()
-
-# Configure logging
+# Configure logging at INFO level
 logging.basicConfig(level=logging.INFO)
 
 # Base URL for Microsoft Graph
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
+
+# Initialize the new OpenAI v1 client
+openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def _parse_iso(dt_str: str) -> datetime | None:
     """
@@ -35,7 +34,7 @@ def fetch_emails_since(from_time_iso: str) -> list[dict]:
     """
     cutoff = _parse_iso(from_time_iso)
     if cutoff is None:
-        raise ValueError(f"Invalid from_time: {from_time_iso!r}")
+        raise ValueError(f"Invalid from_time: {from_time_iso}")
 
     token = get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
@@ -43,14 +42,15 @@ def fetch_emails_since(from_time_iso: str) -> list[dict]:
     params = {
         "$orderby": "receivedDateTime desc",
         "$top": 50,
-        "$select": "subject,receivedDateTime,from,bodyPreview",
+        "$select": "subject,receivedDateTime,from,bodyPreview"
     }
 
-    logging.info("📬 Fetching inbox batch without Graph filter...")
-    r = httpx.get(url, headers=headers, params=params)
-    r.raise_for_status()
-    items = r.json().get("value", [])
+    logging.info("📬 Fetching inbox batch without filter…")
+    response = httpx.get(url, headers=headers, params=params)
+    response.raise_for_status()
+    items = response.json().get("value", [])
 
+    # Local cutoff filter
     filtered = []
     for item in items:
         received = _parse_iso(item.get("receivedDateTime", ""))
@@ -69,30 +69,34 @@ def analyze_emails(emails: list[dict]) -> str:
     if not emails:
         return "No new emails since that time."
 
-    summaries = []
+    # Build the chat messages
+    system_msg = {
+        "role": "system",
+        "content": "You are a concise assistant. Summarize and prioritize these emails."
+    }
+    user_items = []
     for e in emails:
-        sender = e.get("from", {}).get("emailAddress", {}).get("name", "Unknown")
+        sender  = e.get("from", {}).get("emailAddress", {}).get("name", "Unknown")
         subject = e.get("subject", "(No subject)")
         preview = e.get("bodyPreview", "").replace("\n", " ").strip()
-        summaries.append(f"From {sender}: {subject} — {preview}")
+        user_items.append(f"From {sender}: {subject} — {preview}")
 
-    # Choose model (override via env var if needed)
-    model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-    openai.api_key = os.getenv("OPENAI_API_KEY")
-    logging.info("💬 Summarizing %d emails via OpenAI model=%s...", len(summaries), model)
+    user_msg = {
+        "role": "user",
+        "content": "\n\n".join(user_items)
+    }
 
+    logging.info("💬 Asking OpenAI to summarize %d emails…", len(emails))
     try:
-        resp = openai.ChatCompletion.create(
+        model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+        resp = openai_client.chat.completions.create(
             model=model,
-            messages=[
-                {"role": "system", "content": "You are a concise assistant. Summarize and prioritize these emails."},
-                {"role": "user",   "content": "\n\n".join(summaries)},
-            ],
-            temperature=0.7,
+            messages=[system_msg, user_msg],
+            temperature=0.7
         )
-    except openai.error.InvalidRequestError as ice:
-        # Usually model-not-found or access-denied
-        logging.error("❌ OpenAI request failed: %s", ice)
-        raise RuntimeError(f"OpenAI error: {ice}")
+    except OpenAIError as e:
+        logging.error("⚠️ OpenAI error: %s", e)
+        raise RuntimeError(f"OpenAI request failed: {e}")
 
+    # Extract and return the assistant’s response
     return resp.choices[0].message.content
