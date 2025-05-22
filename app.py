@@ -6,10 +6,11 @@ from fastapi.openapi.utils import get_openapi
 
 app = FastAPI(
     title="Inbox Assistant API",
-    version="1.0.0"
+    version="1.0.0",
+    description="API for summarizing and managing inbox messages"
 )
 
-# ✅ Request schemas
+# Request schemas
 class EmailTimeRequest(BaseModel):
     from_time: str
 
@@ -20,14 +21,13 @@ class ReplyRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     email_id: str
 
-# ✅ Endpoint: summarize important emails since a specific time
+# Endpoints
 @app.post("/getImportantEmails")
 def get_important_emails(request: EmailTimeRequest):
     emails = fetch_emails_since(request.from_time)
     summary = analyze_emails(emails)
     return {"summary": summary}
 
-# ✅ Endpoint: provide a news-style summary of recent inbox activity
 @app.post("/summarizeInboxLikeNews")
 def summarize_news_style():
     from_time = (datetime.utcnow() - timedelta(hours=12)).isoformat()
@@ -35,23 +35,29 @@ def summarize_news_style():
     summary = analyze_emails(emails)
     return {"summary": f"🎙️ Here's your inbox broadcast:\n\n{summary}"}
 
-# ✅ Custom OpenAPI schema to include GPT-required fields
+# Custom OpenAPI schema to support GPT action integration
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
+
     openapi_schema = get_openapi(
         title="Inbox Assistant API",
         version="1.0.0",
         description="API for summarizing and managing inbox messages",
         routes=app.routes,
     )
-    openapi_schema["openapi"] = "3.0.2"  # ✅ Downgrade from 3.1.0 to ensure GPT compatibility
+
+    # Force OpenAPI version to 3.0.2 for GPT compatibility
+    openapi_schema["openapi"] = "3.0.2"
+
+    # Add servers block so GPT knows where to send action calls
     openapi_schema["servers"] = [
         {
             "url": "https://inbox-assistant.onrender.com",
             "description": "Render Deployment"
         }
     ]
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
