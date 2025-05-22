@@ -35,7 +35,7 @@ def summarize_news_style():
     summary = analyze_emails(emails)
     return {"summary": f"🎙️ Here's your inbox broadcast:\n\n{summary}"}
 
-# Custom OpenAPI schema to support GPT action integration
+# OpenAPI schema override for GPT compatibility
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -47,10 +47,9 @@ def custom_openapi():
         routes=app.routes,
     )
 
-    # Force OpenAPI version to 3.0.2 for GPT compatibility
-    openapi_schema["openapi"] = "3.0.2"
+    # ✅ MUST be 3.1.0 for GPT schema engine
+    openapi_schema["openapi"] = "3.1.0"
 
-    # Add servers block so GPT knows where to send action calls
     openapi_schema["servers"] = [
         {
             "url": "https://inbox-assistant.onrender.com",
