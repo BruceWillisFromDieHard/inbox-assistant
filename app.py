@@ -20,13 +20,14 @@ class ReplyRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     email_id: str
 
-# ✅ Routes
+# ✅ Endpoint: summarize important emails since a specific time
 @app.post("/getImportantEmails")
 def get_important_emails(request: EmailTimeRequest):
     emails = fetch_emails_since(request.from_time)
     summary = analyze_emails(emails)
     return {"summary": summary}
 
+# ✅ Endpoint: provide a news-style summary of recent inbox activity
 @app.post("/summarizeInboxLikeNews")
 def summarize_news_style():
     from_time = (datetime.utcnow() - timedelta(hours=12)).isoformat()
@@ -34,7 +35,7 @@ def summarize_news_style():
     summary = analyze_emails(emails)
     return {"summary": f"🎙️ Here's your inbox broadcast:\n\n{summary}"}
 
-# ✅ Inject `servers` block manually into the OpenAPI schema
+# ✅ Custom OpenAPI schema to include GPT-required fields
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -44,6 +45,7 @@ def custom_openapi():
         description="API for summarizing and managing inbox messages",
         routes=app.routes,
     )
+    openapi_schema["openapi"] = "3.0.2"  # ✅ Downgrade from 3.1.0 to ensure GPT compatibility
     openapi_schema["servers"] = [
         {
             "url": "https://inbox-assistant.onrender.com",
@@ -51,6 +53,6 @@ def custom_openapi():
         }
     ]
     app.openapi_schema = openapi_schema
-    return openapi_schema
+    return app.openapi_schema
 
 app.openapi = custom_openapi
