@@ -21,7 +21,6 @@ class ReplyRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     email_id: str
 
-# Endpoints
 @app.post("/getImportantEmails")
 def get_important_emails(request: EmailTimeRequest):
     emails = fetch_emails_since(request.from_time)
@@ -35,29 +34,22 @@ def summarize_news_style():
     summary = analyze_emails(emails)
     return {"summary": f"🎙️ Here's your inbox broadcast:\n\n{summary}"}
 
-# OpenAPI schema override for GPT compatibility
+# ✅ Custom OpenAPI override that holds 3.1.0 explicitly
 def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-
-    openapi_schema = get_openapi(
-        title="Inbox Assistant API",
-        version="1.0.0",
-        description="API for summarizing and managing inbox messages",
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
         routes=app.routes,
     )
-
-    # ✅ MUST be 3.1.0 for GPT schema engine
-    openapi_schema["openapi"] = "3.1.0"
-
-    openapi_schema["servers"] = [
+    schema["openapi"] = "3.1.0"  # <- 🔥 force override that GPT builder accepts
+    schema["servers"] = [
         {
             "url": "https://inbox-assistant.onrender.com",
             "description": "Render Deployment"
         }
     ]
-
-    app.openapi_schema = openapi_schema
+    app.openapi_schema = schema
     return app.openapi_schema
 
 app.openapi = custom_openapi
