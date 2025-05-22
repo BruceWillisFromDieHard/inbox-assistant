@@ -7,10 +7,12 @@ from fastapi.openapi.utils import get_openapi
 app = FastAPI(
     title="Inbox Assistant API",
     version="1.0.0",
-    description="API for summarizing and managing inbox messages"
+    servers=[{
+        "url": "https://inbox-assistant.onrender.com",
+        "description": "Render Deployment"
+    }]
 )
 
-# Request schemas
 class EmailTimeRequest(BaseModel):
     from_time: str
 
@@ -34,22 +36,20 @@ def summarize_news_style():
     summary = analyze_emails(emails)
     return {"summary": f"🎙️ Here's your inbox broadcast:\n\n{summary}"}
 
-# ✅ Custom OpenAPI override that holds 3.1.0 explicitly
 def custom_openapi():
-    schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        description=app.description,
+    if app.openapi_schema:
+        return app.openapi_schema
+    openapi_schema = get_openapi(
+        title="Inbox Assistant API",
+        version="1.0.0",
+        description="API for summarizing and managing inbox messages",
         routes=app.routes,
     )
-    schema["openapi"] = "3.1.0"  # <- 🔥 force override that GPT builder accepts
-    schema["servers"] = [
-        {
-            "url": "https://inbox-assistant.onrender.com",
-            "description": "Render Deployment"
-        }
-    ]
-    app.openapi_schema = schema
+    openapi_schema["servers"] = [{
+        "url": "https://inbox-assistant.onrender.com",
+        "description": "Render Deployment"
+    }]
+    app.openapi_schema = openapi_schema
     return app.openapi_schema
 
 app.openapi = custom_openapi

@@ -37,7 +37,7 @@ def analyze_emails(emails):
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "Summarize and prioritize these emails. Format as a morning briefing."},
+            {"role": "system", "content": "Summarize and prioritize these emails."},
             {"role": "user", "content": "\n\n".join(summaries)}
         ]
     )
