@@ -3,9 +3,9 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta
 from email_utils import fetch_emails_since, analyze_emails
 
-app = FastAPI()  # ✅ Required for uvicorn to find and launch the app
+app = FastAPI()  # Required for uvicorn to run
 
-# ✅ Request schemas
+# Request schemas
 class EmailTimeRequest(BaseModel):
     from_time: str
 
@@ -16,7 +16,6 @@ class ReplyRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     email_id: str
 
-# ✅ Routes
 @app.post("/getImportantEmails")
 def get_important_emails(request: EmailTimeRequest):
     emails = fetch_emails_since(request.from_time)

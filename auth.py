@@ -9,7 +9,6 @@ def get_access_token():
     )
 
     result = app.acquire_token_silent(["https://graph.microsoft.com/.default"], account=None)
-
     if not result:
         result = app.acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
 

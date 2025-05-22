@@ -1,16 +1,14 @@
 import httpx
 import os
-from datetime import datetime, timedelta
-from auth import get_access_token
 import openai
+from auth import get_access_token
 
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 
 def fetch_emails_since(from_time_iso):
-    access_token = get_access_token()
-    headers = {"Authorization": f"Bearer {access_token}"}
+    token = get_access_token()
+    headers = {"Authorization": f"Bearer {token}"}
     url = f"{GRAPH_URL}/users/{os.getenv('USER_ID')}/mailFolders/Inbox/messages"
     params = {
         "$orderby": "receivedDateTime desc",
@@ -23,17 +21,15 @@ def fetch_emails_since(from_time_iso):
     return r.json().get("value", [])
 
 def analyze_emails(emails):
-    summaries = []
-    for email in emails:
-        summaries.append(f"From {email['sender']['emailAddress']['name']}: {email['subject']}\n{email['body']['content'][:500]}")
+    summaries = [
+        f"From {e['sender']['emailAddress']['name']}: {e['subject']}\n{e['body']['content'][:300]}"
+        for e in emails
+    ]
     response = openai.ChatCompletion.create(
         model="gpt-4",
-        messages=[{
-            "role": "system",
-            "content": "You're a sharp executive assistant. Summarize and prioritize these emails. Focus on urgency, actions, and meaning — not just topics."
-        }, {
-            "role": "user",
-            "content": "\n\n".join(summaries)
-        }]
+        messages=[
+            {"role": "system", "content": "Summarize and prioritize these emails. Focus on urgency, decisions, tone, and meaning — not just subject lines."},
+            {"role": "user", "content": "\n\n".join(summaries)}
+        ]
     )
     return response["choices"][0]["message"]["content"]
