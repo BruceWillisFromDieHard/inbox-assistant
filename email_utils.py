@@ -1,14 +1,10 @@
 import os
 import httpx
 import logging
-from auth import get_access_token
-from datetime import datetime
 import openai
+from auth import get_access_token
 
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
-logging.basicConfig(level=logging.INFO)
 
 def fetch_emails_since(from_time_iso):
     token = get_access_token()
@@ -29,27 +25,19 @@ def fetch_emails_since(from_time_iso):
     r.raise_for_status()
 
     emails = r.json().get("value", [])
-    logging.info("✅ %d emails fetched", len(emails))
+    logging.info("📥 %d emails fetched", len(emails))
     return emails
 
 def analyze_emails(emails):
-    summaries = []
-    for e in emails:
-        try:
-            sender = e.get("from", {}).get("emailAddress", {}).get("name", "Unknown")
-            subject = e.get("subject", "(No subject)")
-            preview = e.get("bodyPreview", "").strip()
-            summaries.append(f"From {sender}: {subject} — {preview}")
-        except Exception as ex:
-            logging.warning("⚠️ Failed to parse one email: %s", ex)
-
-    if not summaries:
-        return "No relevant emails found."
+    summaries = [
+        f"From {e['from']['emailAddress']['name']}: {e['subject']}\n{e['bodyPreview']}"
+        for e in emails
+    ]
 
     response = openai.ChatCompletion.create(
         model="gpt-4",
         messages=[
-            {"role": "system", "content": "Summarize and prioritize these emails. Focus on what the user should know or act on."},
+            {"role": "system", "content": "Summarize and prioritize these emails. Format as a morning briefing."},
             {"role": "user", "content": "\n\n".join(summaries)}
         ]
     )
