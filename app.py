@@ -7,16 +7,21 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from email_utils import fetch_emails_since, analyze_emails, stream_analyze_emails
+from auth import get_access_token
+from email_utils import (
+    fetch_emails_since,
+    analyze_emails,
+    stream_summarize_emails,
+)
 
 # 1. Load .env
 load_dotenv()
 
-# 2. Configure logging
+# 2. Configure root logger
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(
-    debug=True,  # full tracebacks in responses
+    debug=True,
     title="Inbox Assistant API",
     version="1.0.0",
     servers=[{
@@ -24,6 +29,7 @@ app = FastAPI(
         "description": "Render Deployment"
     }]
 )
+
 
 class EmailTimeRequest(BaseModel):
     from_time: str
@@ -40,19 +46,6 @@ def get_important_emails(request: EmailTimeRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/getImportantEmails/stream")
-def get_important_emails_stream(request: EmailTimeRequest):
-    try:
-        emails = fetch_emails_since(request.from_time)
-        return StreamingResponse(
-            stream_analyze_emails(emails),
-            media_type="text/plain; charset=utf-8"
-        )
-    except Exception as e:
-        logging.exception("❌ Error in /getImportantEmails/stream")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.post("/summarizeInboxLikeNews")
 def summarize_news_style():
     try:
@@ -65,21 +58,40 @@ def summarize_news_style():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/getImportantEmails/stream")
+def get_important_emails_stream(request: EmailTimeRequest):
+    """
+    Streams the summary back token-by-token.
+    """
+    try:
+        emails = fetch_emails_since(request.from_time)
+        model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
+        temp  = float(os.getenv("OPENAI_TEMP", 0.7))
+        return StreamingResponse(
+            stream_summarize_emails(emails, model=model, temperature=temp),
+            media_type="text/plain; charset=utf-8"
+        )
+    except Exception as e:
+        logging.exception("❌ Error in /getImportantEmails/stream")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     from fastapi.openapi.utils import get_openapi
-    schema = get_openapi(
+    spec = get_openapi(
         title=app.title,
         version=app.version,
         description="API for summarizing and managing inbox messages",
         routes=app.routes,
     )
-    schema["servers"] = [{
+    spec["servers"] = [{
         "url": os.getenv("SERVICE_URL", "https://inbox-assistant.onrender.com"),
         "description": "Render Deployment"
     }]
-    app.openapi_schema = schema
-    return schema
+    app.openapi_schema = spec
+    return spec
+
 
 app.openapi = custom_openapi

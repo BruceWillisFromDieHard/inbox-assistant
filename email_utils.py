@@ -1,47 +1,43 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
-from typing import Iterator
-
 from openai import OpenAI, OpenAIError
+
 from auth import get_access_token
 
-# Configure logging at INFO level
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Base URL for Microsoft Graph
+# Microsoft Graph base URL
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 
-# Initialize the OpenAI v1 client
+# OpenAI v1 client
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# How many emails per chunk for streaming
-CHUNK_SIZE = int(os.getenv("EMAIL_CHUNK_SIZE", "10"))
-
-# System prompt
-SYSTEM_MSG = {
-    "role": "system",
-    "content": "You are a concise assistant. Summarize and prioritize these emails."
-}
 
 
 def _parse_iso(dt_str: str) -> datetime | None:
     """
-    Parse an ISO8601 string into a datetime.
-    Accepts trailing 'Z' or '+00:00'.
+    Parse an ISO8601 timestamp into a timezone-aware datetime (UTC).
+    - If it ends with 'Z', convert to '+00:00'.
+    - If it has no offset at all, assume UTC.
+    Returns None on parse failure.
     """
     try:
         if dt_str.endswith("Z"):
             dt_str = dt_str[:-1] + "+00:00"
+        # if no offset and no 'Z', assume UTC
+        elif "+" not in dt_str and "-" not in dt_str[10:]:
+            dt_str += "+00:00"
         return datetime.fromisoformat(dt_str)
-    except Exception:
+    except Exception as e:
+        logging.warning("Failed to parse datetime %r: %s", dt_str, e)
         return None
 
 
 def fetch_emails_since(from_time_iso: str) -> list[dict]:
     """
-    Fetch up to 50 emails, then filter locally by cutoff.
+    Fetch up to 50 messages from Inbox, then locally filter to >= cutoff.
     """
     cutoff = _parse_iso(from_time_iso)
     if cutoff is None:
@@ -53,22 +49,19 @@ def fetch_emails_since(from_time_iso: str) -> list[dict]:
     params = {
         "$orderby": "receivedDateTime desc",
         "$top": 50,
-        "$select": "subject,receivedDateTime,from,bodyPreview"
+        "$select": "subject,receivedDateTime,from,bodyPreview",
     }
 
     logging.info("📬 Fetching inbox batch without filter…")
     r = httpx.get(url, headers=headers, params=params)
     r.raise_for_status()
-    items = r.json().get("value", [])
 
+    items = r.json().get("value", [])
     filtered = []
-    for itm in items:
-        received = _parse_iso(itm.get("receivedDateTime", ""))
-        # make cutoff tz‐aware if necessary
-        if received and cutoff.tzinfo is None:
-            cutoff = cutoff.replace(tzinfo=received.tzinfo)
-        if received and received >= cutoff:
-            filtered.append(itm)
+    for msg in items:
+        rec = _parse_iso(msg.get("receivedDateTime", ""))  # always aware
+        if rec and rec >= cutoff:
+            filtered.append(msg)
         else:
             break
 
@@ -78,67 +71,63 @@ def fetch_emails_since(from_time_iso: str) -> list[dict]:
 
 def analyze_emails(emails: list[dict]) -> str:
     """
-    One-shot summarization.
+    Non-streaming summary via OpenAI.
     """
     if not emails:
         return "No new emails since that time."
 
-    user_content = []
+    system_msg = {
+        "role": "system",
+        "content": "You are a concise assistant. Summarize and prioritize these emails."
+    }
+    user_lines = []
     for e in emails:
-        sender  = e["from"]["emailAddress"]["name"]
-        subj    = e.get("subject", "(No subject)")
-        preview = e.get("bodyPreview", "").replace("\n", " ").strip()
-        user_content.append(f"From {sender}: {subj} — {preview}")
+        sender = e.get("from", {}).get("emailAddress", {}).get("name", "Unknown")
+        subj   = e.get("subject", "(No subject)")
+        prev   = e.get("bodyPreview", "").replace("\n", " ").strip()
+        user_lines.append(f"From {sender}: {subj} — {prev}")
 
-    logging.info("💬 Summarizing %d emails…", len(emails))
+    user_msg = {"role": "user", "content": "\n\n".join(user_lines)}
+
+    logging.info("💬 Summarizing %d emails via OpenAI…", len(emails))
     try:
         model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
         resp = openai_client.chat.completions.create(
             model=model,
-            messages=[SYSTEM_MSG, {"role": "user", "content": "\n\n".join(user_content)}],
+            messages=[system_msg, user_msg],
             temperature=0.7
         )
-    except OpenAIError as e:
-        logging.error("⚠️ OpenAI error: %s", e)
-        raise RuntimeError(f"OpenAI request failed: {e}")
+    except OpenAIError as ex:
+        logging.error("⚠️ OpenAI error: %s", ex)
+        raise RuntimeError(f"OpenAI request failed: {ex}")
 
     return resp.choices[0].message.content
 
 
-def stream_analyze_emails(emails: list[dict]) -> Iterator[str]:
+def stream_summarize_emails(emails: list[dict], model: str, temperature: float):
     """
-    Stream summaries in CHUNK_SIZE batches.
+    Yield tokens directly from OpenAI's streaming chat completion.
     """
-    if not emails:
-        yield "No new emails since that time."
-        return
+    system_msg = {"role": "system", "content": "You are a concise assistant. Summarize and prioritize these emails."}
+    user_msg   = {"role": "user",   "content": "\n\n".join(
+        f"From {e.get('from',{}).get('emailAddress',{}).get('name','Unknown')}: "
+        f"{e.get('subject','(No subject)')} — "
+        f"{e.get('bodyPreview','').replace('\\n',' ').strip()}"
+        for e in emails
+    )}
 
-    batches = [emails[i : i + CHUNK_SIZE] for i in range(0, len(emails), CHUNK_SIZE)]
-    for idx, batch in enumerate(batches, start=1):
-        header = f"\n--- Chunk {idx}/{len(batches)} ---\n"
-        yield header
-
-        user_content = "\n\n".join(
-            f"From {e['from']['emailAddress']['name']}: "
-            f"{e.get('subject','(No subject)')} — "
-            f"{e.get('bodyPreview','').replace(chr(10),' ')}"
-            for e in batch
+    logging.info("💬 Starting OpenAI streaming for %d emails…", len(emails))
+    try:
+        stream = openai_client.chat.completions.create(
+            model=model,
+            messages=[system_msg, user_msg],
+            temperature=temperature,
+            stream=True
         )
-
-        logging.info("📡 Streaming chunk %d/%d…", idx, len(batches))
-        try:
-            model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
-            stream = openai_client.chat.completions.create(
-                model=model,
-                messages=[SYSTEM_MSG, {"role": "user", "content": user_content}],
-                temperature=0.7,
-                stream=True
-            )
-        except OpenAIError as e:
-            logging.error("⚠️ OpenAI stream error: %s", e)
-            raise RuntimeError(f"OpenAI stream failed: {e}")
-
-        for delta in stream:
-            token = delta.choices[0].delta.get("content")
-            if token:
-                yield token
+        for chunk in stream:
+            delta = chunk.choices[0].delta.get("content")
+            if delta:
+                yield delta
+    except OpenAIError as ex:
+        logging.error("⚠️ OpenAI streaming error: %s", ex)
+        yield f"\n\nError: {ex}"
