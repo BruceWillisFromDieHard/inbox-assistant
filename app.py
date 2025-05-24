@@ -1,23 +1,22 @@
-# app.py
 import os
 import logging
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-from auth import get_access_token
-from email_utils import fetch_emails_since, analyze_emails
+from email_utils import fetch_emails_since, analyze_emails, stream_analyze_emails
 
 # 1. Load .env
 load_dotenv()
 
-# 2. Configure root logger
+# 2. Configure logging
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(
-    debug=True,     # ← enable debug traces in responses
+    debug=True,  # full tracebacks in responses
     title="Inbox Assistant API",
     version="1.0.0",
     servers=[{
@@ -29,6 +28,7 @@ app = FastAPI(
 class EmailTimeRequest(BaseModel):
     from_time: str
 
+
 @app.post("/getImportantEmails")
 def get_important_emails(request: EmailTimeRequest):
     try:
@@ -39,10 +39,23 @@ def get_important_emails(request: EmailTimeRequest):
         logging.exception("❌ Error in /getImportantEmails")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/getImportantEmails/stream")
+def get_important_emails_stream(request: EmailTimeRequest):
+    try:
+        emails = fetch_emails_since(request.from_time)
+        return StreamingResponse(
+            stream_analyze_emails(emails),
+            media_type="text/plain; charset=utf-8"
+        )
+    except Exception as e:
+        logging.exception("❌ Error in /getImportantEmails/stream")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/summarizeInboxLikeNews")
 def summarize_news_style():
     try:
-        # default to last 12 hours (with trailing Z)
         cutoff = (datetime.utcnow() - timedelta(hours=12)).isoformat() + "Z"
         emails = fetch_emails_since(cutoff)
         summary = analyze_emails(emails)
@@ -51,21 +64,22 @@ def summarize_news_style():
         logging.exception("❌ Error in /summarizeInboxLikeNews")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
     from fastapi.openapi.utils import get_openapi
-    spec = get_openapi(
+    schema = get_openapi(
         title=app.title,
         version=app.version,
         description="API for summarizing and managing inbox messages",
         routes=app.routes,
     )
-    spec["servers"] = [{
+    schema["servers"] = [{
         "url": os.getenv("SERVICE_URL", "https://inbox-assistant.onrender.com"),
         "description": "Render Deployment"
     }]
-    app.openapi_schema = spec
-    return spec
+    app.openapi_schema = schema
+    return schema
 
 app.openapi = custom_openapi
