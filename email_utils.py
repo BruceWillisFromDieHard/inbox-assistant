@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
 from openai import OpenAI, OpenAIError
 from sse_starlette import EventSourceResponse
@@ -17,15 +17,29 @@ CHUNK_SIZE = int(os.getenv("EMAIL_CHUNK_SIZE", "25"))
 
 
 def _parse_iso(dt_str: str) -> datetime | None:
+    """
+    Parse an ISO8601 string into a UTC‐aware datetime.
+    Accepts trailing 'Z' or explicit offsets.
+    Returns None on failure.
+    """
     try:
+        # Normalize 'Z' to '+00:00'
         if dt_str.endswith("Z"):
             dt_str = dt_str[:-1] + "+00:00"
-        return datetime.fromisoformat(dt_str)
+        dt = datetime.fromisoformat(dt_str)
+        # If no tzinfo, assume UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
     except Exception:
         return None
 
 
 def fetch_emails_since(from_time_iso: str, max_messages: int = MAX_EMAILS) -> list[dict]:
+    """
+    Fetch up to max_messages emails, filter those received ≥ cutoff.
+    Both cutoff and received times are UTC‐aware.
+    """
     cutoff = _parse_iso(from_time_iso)
     if cutoff is None:
         raise ValueError(f"Invalid from_time: {from_time_iso}")
@@ -47,7 +61,9 @@ def fetch_emails_since(from_time_iso: str, max_messages: int = MAX_EMAILS) -> li
     filtered = []
     for item in items:
         received = _parse_iso(item.get("receivedDateTime", ""))
-        if received and received >= cutoff:
+        if not received:
+            continue
+        if received >= cutoff:
             filtered.append(item)
         else:
             break
@@ -57,6 +73,9 @@ def fetch_emails_since(from_time_iso: str, max_messages: int = MAX_EMAILS) -> li
 
 
 def analyze_emails(emails: list[dict]) -> str:
+    """
+    Summarize/prioritize a list of emails via OpenAI.
+    """
     if not emails:
         return "No new emails since that time."
 
