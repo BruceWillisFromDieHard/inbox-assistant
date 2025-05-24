@@ -1,7 +1,8 @@
-fastapi
-uvicorn
-httpx
-msal
-python-dotenv
-openai
-pydantic
+fastapi==0.115.12
+uvicorn==0.34.2
+httpx==0.28.1
+msal==1.32.3
+python-dotenv==1.1.0
+openai==1.82.0
+pydantic==2.11.5
+sse-starlette>=0.11.0
