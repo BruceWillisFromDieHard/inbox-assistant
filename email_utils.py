@@ -1,6 +1,7 @@
+# email_utils.py
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 import httpx
 from openai import OpenAI, OpenAIError
 from auth import get_access_token
@@ -8,38 +9,39 @@ from auth import get_access_token
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Microsoft Graph base URL
+# Graph base
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 
-# Initialize the OpenAI v1 client
+# OpenAI v1 client
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-
 def _parse_iso(dt_str: str) -> datetime | None:
-    """
-    Parse an ISO8601 string into a datetime.
-    Accepts strings ending with 'Z' or with an offset.
-    Returns None if parsing fails.
-    """
     try:
+        # normalize trailing Z
         if dt_str.endswith("Z"):
             dt_str = dt_str[:-1] + "+00:00"
         return datetime.fromisoformat(dt_str)
     except Exception:
         return None
 
-
-def fetch_emails_since(from_time_iso: str) -> list[dict]:
+def fetch_emails_since(
+    from_time_iso: str,
+    max_messages: int = 200
+) -> list[dict]:
     """
-    Fetch the latest 50 emails from the user's Inbox, then filter
-    for those received at or after the given ISO timestamp.
+    Page through Inbox/messages in batches of 50 until you've
+    collected up to max_messages *new* items since from_time_iso.
     """
     cutoff = _parse_iso(from_time_iso)
     if cutoff is None:
         raise ValueError(f"Invalid from_time: {from_time_iso}")
+    # ensure cutoff is aware in UTC
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=timezone.utc)
 
     token = get_access_token()
     headers = {"Authorization": f"Bearer {token}"}
+    # initial endpoint
     url = f"{GRAPH_URL}/users/{os.getenv('USER_ID')}/mailFolders/Inbox/messages"
     params = {
         "$orderby": "receivedDateTime desc",
@@ -47,52 +49,61 @@ def fetch_emails_since(from_time_iso: str) -> list[dict]:
         "$select": "subject,receivedDateTime,from,bodyPreview"
     }
 
-    logging.info("📬 Fetching inbox batch without filter…")
-    resp = httpx.get(url, headers=headers, params=params)
-    resp.raise_for_status()
-    items = resp.json().get("value", [])
+    collected = []
+    while url and len(collected) < max_messages:
+        resp = httpx.get(url, headers=headers, params=params if params else {})
+        resp.raise_for_status()
+        data = resp.json()
 
-    filtered = []
-    for item in items:
-        received = _parse_iso(item.get("receivedDateTime", ""))
-        if received and received >= cutoff:
-            filtered.append(item)
-        else:
-            break
+        for item in data.get("value", []):
+            r = _parse_iso(item["receivedDateTime"])
+            if not r:
+                continue
+            if r.tzinfo is None:
+                r = r.replace(tzinfo=timezone.utc)
+            if r >= cutoff:
+                collected.append(item)
+                if len(collected) >= max_messages:
+                    break
+            else:
+                # once we hit older, stop entirely
+                url = None
+                break
 
-    logging.info("✅ %d emails after local filter", len(filtered))
-    return filtered
+        url = data.get("@odata.nextLink")
+        params = None  # nextLink already has query
 
+    logging.info("📬 Fetched %d emails (max %d)", len(collected), max_messages)
+    return collected
 
 def analyze_emails(emails: list[dict]) -> str:
     """
-    Summarize and prioritize a list of email dicts using OpenAI.
+    Summarize up to ~50 emails in one shot via OpenAI.
     """
     if not emails:
         return "No new emails since that time."
 
-    system_msg = {
+    system = {
         "role": "system",
         "content": "You are a concise assistant. Summarize and prioritize these emails."
     }
     user_lines = []
     for e in emails:
         sender  = e.get("from", {}).get("emailAddress", {}).get("name", "Unknown")
-        subject = e.get("subject", "(No subject)")
+        subj    = e.get("subject", "(No subject)")
         preview = e.get("bodyPreview", "").replace("\n", " ").strip()
-        user_lines.append(f"From {sender}: {subject} — {preview}")
+        user_lines.append(f"From {sender}: {subj} — {preview}")
 
-    user_msg = {
+    user = {
         "role": "user",
         "content": "\n\n".join(user_lines)
     }
 
-    logging.info("💬 Summarizing %d emails via OpenAI…", len(emails))
+    logging.info("💬 Summarizing %d emails…", len(emails))
     try:
-        model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
         resp = openai_client.chat.completions.create(
-            model=model,
-            messages=[system_msg, user_msg],
+            model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
+            messages=[system, user],
             temperature=0.7
         )
     except OpenAIError as e:
@@ -100,42 +111,3 @@ def analyze_emails(emails: list[dict]) -> str:
         raise RuntimeError(f"OpenAI request failed: {e}")
 
     return resp.choices[0].message.content
-
-
-def stream_summarize_emails(emails: list[dict], model: str, temperature: float):
-    """
-    Yield tokens directly from OpenAI's streaming chat completion.
-    """
-    system_msg = {
-        "role": "system",
-        "content": "You are a concise assistant. Summarize and prioritize these emails."
-    }
-
-    # Build user prompt without backslashes in f-strings
-    user_lines = []
-    for e in emails:
-        sender  = e.get("from", {}).get("emailAddress", {}).get("name", "Unknown")
-        subject = e.get("subject", "(No subject)")
-        preview = e.get("bodyPreview", "").replace("\n", " ").strip()
-        user_lines.append(f"From {sender}: {subject} — {preview}")
-
-    user_msg = {
-        "role": "user",
-        "content": "\n\n".join(user_lines)
-    }
-
-    logging.info("💬 Starting OpenAI streaming for %d emails…", len(emails))
-    try:
-        stream = openai_client.chat.completions.create(
-            model=model,
-            messages=[system_msg, user_msg],
-            temperature=temperature,
-            stream=True
-        )
-        for chunk in stream:
-            delta = chunk.choices[0].delta.get("content")
-            if delta:
-                yield delta
-    except OpenAIError as ex:
-        logging.error("⚠️ OpenAI streaming error: %s", ex)
-        yield f"\n\nError: {ex}"
